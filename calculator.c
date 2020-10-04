@@ -2195,14 +2195,43 @@ struct Inventory getSortedInventory(struct Inventory inventory, enum Action sort
 	}
 }
 
+/*-------------------------------------------------------------------
+ * Function 	: logIterations
+ * Inputs	: int				ID
+ *			  int				stepIndex
+ *			  struct BranchPath	*curNode
+ *			  int				iterationCount
+ *			  int				level
+ *
+ * Output the current iteration count to the console. The number is
+ * displayed as thousands, although it will be many millions when a
+ * record is found.
+ -------------------------------------------------------------------*/
 void logIterations(int ID, int stepIndex, struct BranchPath * curNode, int iterationCount, int level)
 {
 	char callString[30];
 	char iterationString[100];
 	sprintf(callString, "Call %d", ID);
 	sprintf(iterationString, "%d steps currently taken, %d frames accumulated so far; %dk iterations",
-		stepIndex, curNode->description.totalFramesTaken, iterationCount / 1000);
+			stepIndex, curNode->description.totalFramesTaken, iterationCount / 1000);
 	recipeLog(level, "Calculator", "Info", callString, iterationString);
+}
+
+/*-------------------------------------------------------------------
+ * Function 	: savePBFrames
+ * Inputs	: int	rearrangedFrames
+ *
+ * Store the current record to a file, which will be read on the next
+ * start of the program.
+ -------------------------------------------------------------------*/
+void savePBFrames(int rearrangedFrames)
+{
+	FILE* fp = fopen("results/PB.txt", "w");
+	// Whatever might cause this, don't treat it as an error
+	if (fp != NULL) {
+		fprintf(fp, "%d", rearrangedFrames);
+		fclose(fp);
+	}
 }
 
 /*-------------------------------------------------------------------
@@ -2269,18 +2298,27 @@ struct Result calculateOrder(int ID) {
 					// A finished roadmap has been generated
 					// Rearrange the roadmap to save frames
 					struct OptimizeResult optimizeResult = optimizeRoadmap(root);
+					int rearrangedFrames = optimizeResult.last->description.totalFramesTaken;
 					#pragma omp critical(optimize)
 					{
-						if (optimizeResult.last->description.totalFramesTaken < getLocalRecord()) {
-							setLocalRecord(optimizeResult.last->description.totalFramesTaken);
+						if (rearrangedFrames < getLocalRecord()) {
+							// Modify record for all threads
+							setLocalRecord(rearrangedFrames);
+							// Modify PB file so the new record persists
+							savePBFrames(rearrangedFrames);
+							// Print to console about record
 							char *filename = malloc(sizeof(char) * 17);
-							sprintf(filename, "results/%d.txt", optimizeResult.last->description.totalFramesTaken);
+							sprintf(filename, "results/%d.txt", rearrangedFrames);
 							printResults(filename, optimizeResult.root);
 							char tmp[100];
-							sprintf(tmp, "New local fastest roadmap found! %d frames, saved %d after rearranging", optimizeResult.last->description.totalFramesTaken, curNode->description.totalFramesTaken - optimizeResult.last->description.totalFramesTaken);
+							sprintf(tmp, "New local fastest roadmap found! %d frames, saved %d after rearranging",
+									rearrangedFrames, curNode->description.totalFramesTaken - rearrangedFrames);
 							recipeLog(1, "Calculator", "Info", "Roadmap", tmp);
 							free(filename);
-							result_cache = (struct Result) {optimizeResult.last->description.totalFramesTaken, ID};
+							// Store the result to return to the caller at
+							// the end of the branch instead of sending here
+							// This prevents a flurry of requests from new users
+							result_cache = (struct Result) {rearrangedFrames, ID};
 							
 							// Reset the iteration count so we continue to explore near this record
 							iterationLimit = iterationCount + ITERATION_LIMIT_INCREASE;
@@ -2444,39 +2482,6 @@ struct Result calculateOrder(int ID) {
 		
 		// Check the cache to see if a result was generated
 		if (result_cache.frames > -1) {
-
-			// Enter critical section to prevent corrupted file
-			#pragma omp critical(pb)
-			{
-				// Prevent slower threads from overwriting a faster record in PB.txt
-				// by first checking the current record
-				FILE* fp;
-				if ((fp = fopen("results/PB.txt", "r+")) == NULL) {
-					// The file has not been created
-					fp = fopen("results/PB.txt", "w");
-				}
-				else {
-					// Verify that this new roadmap is faster than PB
-					int pb_record;
-					fscanf(fp, "%d", &pb_record);
-					fclose(fp);
-					fp = NULL;
-					if (result_cache.frames > pb_record) {
-						// This is a slower thread and a faster record was already found
-						result_cache = (struct Result) { -1, -1 };
-					}
-					else {
-						fp = fopen("results/PB.txt", "w");
-					}
-				}
-				
-				// Modify PB.txt
-				if (fp != NULL) {
-					fprintf(fp, "%d", result_cache.frames);
-					fclose(fp);
-				}
-			}
-
 			// Return the cached result
 			return result_cache;
 		}

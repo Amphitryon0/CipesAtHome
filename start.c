@@ -117,8 +117,8 @@ int main() {
 		while (1) {
 			struct Result result = calculateOrder(ID);
 			
-			// result might store -1 frames for errors that might be recoverable
-			if (result.frames > -1) {
+			// Check that the thread's record is still the overall record
+			if (result.frames == current_frame_record) {
 				testRecord(result.frames);
 			}
 		}
